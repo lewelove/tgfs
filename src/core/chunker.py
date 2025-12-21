@@ -3,11 +3,8 @@ import xxhash
 from utils import shell
 
 def get_hash(path):
-    h = xxhash.xxh64()
-    with open(path, "rb") as f:
-        while chunk := f.read(4 * 1024 * 1024):
-            h.update(chunk)
-    return h.hexdigest()
+    output = shell.run(["xxhsum", "-H64", path]) 
+    return output.split()[0]
 
 def get_padding(total_chunks):
     """Calculates padding based on total chunks, minimum 3 digits."""
