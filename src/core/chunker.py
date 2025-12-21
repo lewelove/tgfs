@@ -3,8 +3,13 @@ import xxhash
 from utils import shell
 
 def get_hash(path):
-    output = shell.run(["xxhsum", "-H64", path]) 
-    return output.split()[0]
+    """Calculates xxh64 hash using native python library for speed and reliability."""
+    hasher = xxhash.xxh64()
+    with open(path, "rb") as f:
+        # Read in 128KB blocks to stay memory efficient
+        for chunk in iter(lambda: f.read(128 * 1024), b""):
+            hasher.update(chunk)
+    return hasher.hexdigest()
 
 def get_padding(total_chunks):
     """Calculates padding based on total chunks, minimum 3 digits."""
@@ -24,7 +29,7 @@ def create_initial_chunks(drive_path, drive_name, total_chunks, chunk_size_mb):
         temp_name = f"{drive_name}.{str(i).zfill(padding)}.tmp"
         path = os.path.join(drive_path, temp_name)
         
-        # Allocate space
+        # Allocate space (Note: fallocate makes it non-sparse, truncate makes it sparse)
         shell.run(["fallocate", "-l", f"{chunk_size_mb}M", path])
         
         # Hash and rename
