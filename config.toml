@@ -1,0 +1,4 @@
+[paths]
+storage_root = "~/tgfs-raw"
+mount_root = "/mnt/tgfs"
+mapper_prefix = "tgfs"
