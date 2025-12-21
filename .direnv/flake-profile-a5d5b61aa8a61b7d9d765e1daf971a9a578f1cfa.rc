@@ -35,7 +35,7 @@ NIX_CC='/nix/store/vr15iyyykg9zai6fpgvhcgyw7gckl78w-gcc-wrapper-14.3.0'
 export NIX_CC
 NIX_CC_WRAPPER_TARGET_HOST_x86_64_unknown_linux_gnu='1'
 export NIX_CC_WRAPPER_TARGET_HOST_x86_64_unknown_linux_gnu
-NIX_CFLAGS_COMPILE=' -frandom-seed=y28m1506yw -isystem /nix/store/kvfgi38k473nrqhxnnssd25nbckj2faa-python3-3.13.9-env/include -isystem /nix/store/xaxfcyscmn8h5a7v1fa2a1ibi3v3hjmx-lvm2-2.03.35-dev/include -isystem /nix/store/gls74sx7nb9ckbj5ay8r49z8xh0a5yr8-util-linux-2.41.2-dev/include -isystem /nix/store/jw4s13slivsqnvwhx639ykxcisrcpv1y-e2fsprogs-1.47.3-dev/include -isystem /nix/store/4anki7bidfcks7vm1489hj3qrkfq9r0v-btrfs-progs-6.17.1/include -isystem /nix/store/na40apkxgv855bc8qpbi6gf0yvdzvnij-sqlite-3.50.4-dev/include -isystem /nix/store/kvfgi38k473nrqhxnnssd25nbckj2faa-python3-3.13.9-env/include -isystem /nix/store/xaxfcyscmn8h5a7v1fa2a1ibi3v3hjmx-lvm2-2.03.35-dev/include -isystem /nix/store/gls74sx7nb9ckbj5ay8r49z8xh0a5yr8-util-linux-2.41.2-dev/include -isystem /nix/store/jw4s13slivsqnvwhx639ykxcisrcpv1y-e2fsprogs-1.47.3-dev/include -isystem /nix/store/4anki7bidfcks7vm1489hj3qrkfq9r0v-btrfs-progs-6.17.1/include -isystem /nix/store/na40apkxgv855bc8qpbi6gf0yvdzvnij-sqlite-3.50.4-dev/include'
+NIX_CFLAGS_COMPILE=' -frandom-seed=lqvbnnx9yq -isystem /nix/store/kvfgi38k473nrqhxnnssd25nbckj2faa-python3-3.13.9-env/include -isystem /nix/store/xaxfcyscmn8h5a7v1fa2a1ibi3v3hjmx-lvm2-2.03.35-dev/include -isystem /nix/store/gls74sx7nb9ckbj5ay8r49z8xh0a5yr8-util-linux-2.41.2-dev/include -isystem /nix/store/jw4s13slivsqnvwhx639ykxcisrcpv1y-e2fsprogs-1.47.3-dev/include -isystem /nix/store/4anki7bidfcks7vm1489hj3qrkfq9r0v-btrfs-progs-6.17.1/include -isystem /nix/store/na40apkxgv855bc8qpbi6gf0yvdzvnij-sqlite-3.50.4-dev/include -isystem /nix/store/kvfgi38k473nrqhxnnssd25nbckj2faa-python3-3.13.9-env/include -isystem /nix/store/xaxfcyscmn8h5a7v1fa2a1ibi3v3hjmx-lvm2-2.03.35-dev/include -isystem /nix/store/gls74sx7nb9ckbj5ay8r49z8xh0a5yr8-util-linux-2.41.2-dev/include -isystem /nix/store/jw4s13slivsqnvwhx639ykxcisrcpv1y-e2fsprogs-1.47.3-dev/include -isystem /nix/store/4anki7bidfcks7vm1489hj3qrkfq9r0v-btrfs-progs-6.17.1/include -isystem /nix/store/na40apkxgv855bc8qpbi6gf0yvdzvnij-sqlite-3.50.4-dev/include'
 export NIX_CFLAGS_COMPILE
 NIX_ENFORCE_NO_NATIVE='1'
 export NIX_ENFORCE_NO_NATIVE
@@ -176,6 +176,7 @@ declare -a propagatedTargetDepFiles=('propagated-target-target-deps' )
 shell='/nix/store/rlq03x4cwf8zn73hxaxnx0zn5q9kifls-bash-5.3p3/bin/bash'
 export shell
 shellHook='export PYTHONPATH="$PYTHONPATH:$(pwd)/src"
+clear
 '
 export shellHook
 stdenv='/nix/store/s3w5m3spa1g71hx0yb82lvk6394j3w5j-stdenv-linux'
