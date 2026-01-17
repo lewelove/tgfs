@@ -1,96 +1,180 @@
 import os
+import time
+import sys
+import multiprocessing
+import signal
 import typer
 from config_loader import get_config
-from core import database, chunker, mapper, mount, formatter, validator
+from core import database, chunker, formatter, validator, nbd_server
 from utils import shell
 
 conf = get_config()
 
+def get_pid_file(name):
+    return os.path.join(conf['paths']['storage_root'], f".{name}.pid")
+
 def create_drive(name: str, size_mb: int, chunk_mb: int, fs: str):
     path = validator.get_drive_path(name)
-    prefix = conf['paths']['mapper_prefix']
     storage_root = conf['paths']['storage_root']
 
     if not os.path.exists(storage_root):
         os.makedirs(storage_root, exist_ok=True)
 
     os.makedirs(path, exist_ok=True)
-    db = database.DBManager(path, name)
+    
     total_chunks = size_mb // chunk_mb
+    if size_mb % chunk_mb != 0: total_chunks += 1
+    
+    # DB Init
+    db = database.DBManager(path, name)
     db.initialize({"chunk_size_mb": chunk_mb, "total_chunks": total_chunks, "fs": fs})
     
     typer.echo("[*] Allocating chunks...")
     chunks = chunker.create_initial_chunks(path, name, total_chunks, chunk_mb)
     for c in chunks:
-        # Store initial stats to enable fast 'check' later
         st = os.stat(os.path.join(path, c['filename']))
         db.update_chunk(c['index'], c['hash'], c['filename'], st.st_size, st.st_mtime)
     
-    typer.echo("[*] Mapping and Formatting...")
+    typer.echo("[*] Formatting...")
+    # To format, we must momentarily mount (attach NBD)
+    # We run the daemon in a separate process
+    device = "/dev/nbd0"
+    p = multiprocessing.Process(
+        target=nbd_server.run_daemon,
+        args=(path, name, chunk_mb, total_chunks, device)
+    )
+    p.start()
+    
+    # Wait for device to appear
+    time.sleep(1) 
+    
     try:
-        vdev = mapper.map_vdev(name, chunks, path, prefix)
-        formatter.format_device(vdev, fs)
+        formatter.format_device(device, fs)
+    except Exception as e:
+        typer.secho(f"Formatting failed: {e}", fg="red")
     finally:
-        mapper.unmap_vdev(name, prefix, path)
+        # Kill the temp daemon
+        shell.run(["nbd-client", "-d", device], check=False)
+        p.terminate()
+        p.join()
 
     fix_permissions(storage_root, recursive=True)
     typer.secho(f"[+] Drive '{name}' created successfully.", fg="green")
 
+def mount_drive(name: str):
+    validator.require_drive_exists(name)
+    if is_running(name):
+        typer.echo(f"Drive {name} is already mounted/running.")
+        return
+
+    path = validator.get_drive_path(name)
+    db = database.DBManager(path, name)
+    chunk_mb = int(db.get_meta("chunk_size_mb"))
+    total_chunks = int(db.get_meta("total_chunks"))
+    fs = db.get_meta("fs")
+    
+    device = "/dev/nbd0" # In future, find first free NBD
+    
+    typer.echo("[*] Starting NBD Daemon...")
+    p = multiprocessing.Process(
+        target=nbd_server.run_daemon,
+        args=(path, name, chunk_mb, total_chunks, device)
+    )
+    p.daemon = True
+    p.start()
+    
+    # Save PID
+    with open(get_pid_file(name), 'w') as f:
+        f.write(str(p.pid))
+    
+    time.sleep(1) # Wait for init
+    
+    # Mount Filesystem
+    mount_point = conf['paths']['mount_root']
+    try:
+        from core import mount
+        mount.mount_vdev(device, mount_point, name, fs)
+        typer.secho(f"[+] Mounted {name} at {mount_point}/{name}", fg="green")
+    except Exception as e:
+        typer.secho(f"[-] Mount failed: {e}", fg="red")
+        p.terminate()
+        if os.path.exists(get_pid_file(name)): os.remove(get_pid_file(name))
+
+def umount_drive(name: str):
+    mount_point = conf['paths']['mount_root']
+    
+    # 1. System Umount
+    from core import mount
+    mount.umount_vdev(mount_point, name)
+    
+    # 2. Stop Daemon
+    pid_file = get_pid_file(name)
+    if os.path.exists(pid_file):
+        with open(pid_file, 'r') as f:
+            pid = int(f.read().strip())
+        
+        # Disconnect NBD gracefully
+        shell.run(["nbd-client", "-d", "/dev/nbd0"], check=False)
+        
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+            
+        os.remove(pid_file)
+    
+    # 3. Check integrity
+    check_drive(name)
+    typer.secho(f"[+] Unmounted {name}", fg="green")
+
+def is_running(name):
+    pid_file = get_pid_file(name)
+    if not os.path.exists(pid_file): return False
+    try:
+        with open(pid_file, 'r') as f:
+            pid = int(f.read())
+        os.kill(pid, 0) # Check if process exists
+        return True
+    except:
+        return False
+
 def check_drive(name: str):
+    # Same logic as before, just verifies files on disk
     validator.require_drive_exists(name)
     path = validator.get_drive_path(name)
     db = database.DBManager(path, name)
     chunks = db.get_chunks()
     padding = chunker.get_padding(int(db.get_meta("total_chunks")))
     
-    changed_count = 0
-    skipped_count = 0
-
-    for c in chunks:
-        file_path = os.path.join(path, c['filename'])
-        if not os.path.exists(file_path):
-            continue
-
-        st = os.stat(file_path)
-        # SKIP LOGIC: If size and mtime are identical to DB, the chunk is unchanged
-        if abs(st.st_mtime - (c.get('mtime') or 0)) < 0.0001 and st.st_size == c.get('size'):
-            skipped_count += 1
-            continue
-
-        # Only hash if mtime changed
-        new_h = chunker.get_hash(file_path)
-        if new_h != c['hash']:
-            new_name = chunker.format_name(name, c['chunk_index'], new_h, padding)
-            new_path = os.path.join(path, new_name)
-            os.rename(file_path, new_path)
-            
-            # Update DB with new stats
-            new_st = os.stat(new_path)
-            db.update_chunk(c['chunk_index'], new_h, new_name, new_st.st_size, new_st.st_mtime)
-            typer.echo(f" [!] Updated: Chunk {c['chunk_index']} -> {new_h}")
-            changed_count += 1
-        else:
-            # Hash matches but mtime was different? Update DB mtime to match disk
-            db.update_chunk(c['chunk_index'], c['hash'], c['filename'], st.st_size, st.st_mtime)
-
-    typer.echo(f"[-] Check complete: {skipped_count} skipped, {changed_count} updated.")
-
-def mount_drive(name: str):
-    validator.require_drive_exists(name)
-    path = validator.get_drive_path(name)
-    prefix = conf['paths']['mapper_prefix']
-    db = database.DBManager(path, name)
+    changed = 0
+    typer.echo("[*] Scanning chunks for changes...")
     
-    vdev = mapper.map_vdev(name, db.get_chunks(), path, prefix)
-    mount.mount_vdev(vdev, conf['paths']['mount_root'], name, db.get_meta("fs"))
-    typer.secho(f"[+] Mounted {name}", fg="green")
-
-def umount_drive(name: str):
-    path = validator.get_drive_path(name)
-    mount.umount_vdev(conf['paths']['mount_root'], name)
-    mapper.unmap_vdev(name, conf['paths']['mapper_prefix'], path)
-    check_drive(name)
-    typer.secho(f"[+] Closed {name}", fg="green")
+    for c in chunks:
+        # Note: If we wrote data, filenames might still be OLD hash.
+        # We need to find the file by index.
+        # Current naive impl looks for file in DB. 
+        # But IO Engine didn't rename files.
+        # So the file on disk is still `drive.001.OLDHASH.img` but content is NEW.
+        
+        curr_path = os.path.join(path, c['filename'])
+        if not os.path.exists(curr_path):
+            continue
+            
+        st = os.stat(curr_path)
+        # If mtime changed, rehash
+        if abs(st.st_mtime - (c.get('mtime') or 0)) > 0.0001 or st.st_size != c.get('size'):
+            new_h = chunker.get_hash(curr_path)
+            if new_h != c['hash']:
+                # Rename to new hash
+                new_name = chunker.format_name(name, c['chunk_index'], new_h, padding)
+                new_full = os.path.join(path, new_name)
+                os.rename(curr_path, new_full)
+                
+                db.update_chunk(c['chunk_index'], new_h, new_name, st.st_size, st.st_mtime)
+                changed += 1
+                typer.echo(f"Updated Chunk {c['chunk_index']}")
+    
+    typer.echo(f"Check complete. {changed} chunks updated.")
 
 def fix_permissions(path, recursive=True):
     sudo_user = os.environ.get("SUDO_USER")

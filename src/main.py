@@ -1,7 +1,7 @@
 import typer
 from core import manager, validator
 
-app = typer.Typer(help="tgfs: Telegram File System CLI", add_completion=False)
+app = typer.Typer(help="tgfs: Telegram File System CLI (NBD Architecture)", add_completion=False)
 
 @app.command(name="create")
 def create(
@@ -10,52 +10,36 @@ def create(
     chunk_mb: int = typer.Option(None, "--chunk", "-c", help="Chunk size in MB"),
     fs: str = typer.Option(None, "--fs", "-f", help="Filesystem (ext4/btrfs)")
 ):
-    """Initializes, maps, formats, and then unmaps a new virtual drive."""
-    # 1. Name Validation Loop
+    """Initializes and formats a new drive using NBD."""
     while True:
-        if not name:
-            name = typer.prompt("Drive Name")
-
+        if not name: name = typer.prompt("Drive Name")
         if validator.exists_on_disk(name):
-            typer.secho(f"Error: Drive folder '{name}' already exists.", fg="red")
+            typer.secho(f"Error: Drive '{name}' already exists.", fg="red")
             name = None; continue
-
-        if validator.is_active_in_kernel(name):
-            typer.secho(f"Error: Drive '{name}' is active in kernel.", fg="red")
-            name = None; continue
-        
         break
 
-    # 2. Get Remaining Inputs (UPDATED DEFAULTS)
     if not size_mb: size_mb = int(typer.prompt("Total Size (MB)"))
     if not chunk_mb: chunk_mb = int(typer.prompt("Chunk Size (MB)", default=500))
     if not fs: fs = typer.prompt("Filesystem (ext4/btrfs)", default="btrfs")
 
-    # 3. Handover to Manager
     manager.create_drive(name, size_mb, chunk_mb, fs)
 
 @app.command(name="mount")
-def mount_cmd(name: str = typer.Argument(None, help="The name of the drive to mount")):
-    """Maps and mounts the virtual drive."""
-    if not name: name = typer.prompt("Drive Name to mount")
+def mount_cmd(name: str = typer.Argument(None)):
+    """Starts the NBD daemon and mounts the filesystem."""
+    if not name: name = typer.prompt("Drive Name")
     manager.mount_drive(name)
 
 @app.command(name="umount")
-def umount_cmd(name: str = typer.Argument(None, help="The name of the drive to unmount")):
-    """Unmounts, unmaps, and runs an integrity check."""
-    if not name: name = typer.prompt("Drive Name to unmount")
+def umount_cmd(name: str = typer.Argument(None)):
+    """Unmounts filesystem and stops the NBD daemon."""
+    if not name: name = typer.prompt("Drive Name")
     manager.umount_drive(name)
 
-@app.command(name="map")
-def map_cmd(name: str = typer.Argument(None, help="The name of the drive to map")):
-    """Assembles the chunks into a device mapper node without mounting."""
-    if not name: name = typer.prompt("Drive Name to map")
-    manager.map_drive(name)
-
 @app.command(name="check")
-def check_cmd(name: str = typer.Argument(None, help="The name of the drive to check")):
-    """Scans chunks for changes and updates the database."""
-    if not name: name = typer.prompt("Drive Name to check")
+def check_cmd(name: str = typer.Argument(None)):
+    """Scans chunks, updates hashes in DB."""
+    if not name: name = typer.prompt("Drive Name")
     manager.check_drive(name)
 
 if __name__ == "__main__":

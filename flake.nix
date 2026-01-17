@@ -1,5 +1,5 @@
 {
-  description = "tgfs: Telegram File System CLI (MVP1)";
+  description = "tgfs: Telegram File System CLI (NBD MVP)";
 
   inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
 
@@ -15,11 +15,12 @@
       ];
 
       systemDeps = with pkgs; [
-        lvm2
         util-linux
         e2fsprogs
         btrfs-progs
         sqlite
+        nbd # For nbd-client utility
+        kmod # For modprobe
       ];
     in
     {
@@ -28,7 +29,10 @@
 
         shellHook = ''
           export PYTHONPATH="$PYTHONPATH:$(pwd)/src"
+          # Try to load module if possible (might fail in containers)
+          sudo modprobe nbd 2>/dev/null || true
           clear
+          echo "TGFS Dev Shell (NBD Architecture)"
         '';
       };
     };
