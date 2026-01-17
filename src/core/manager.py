@@ -2,6 +2,7 @@ import os
 import time
 import sys
 import multiprocessing
+import subprocess
 import signal
 import typer
 from config_loader import get_config
@@ -36,8 +37,8 @@ def create_drive(name: str, size_mb: int, chunk_mb: int, fs: str):
         db.update_chunk(c['index'], c['hash'], c['filename'], st.st_size, st.st_mtime)
     
     typer.echo("[*] Formatting...")
-    # To format, we must momentarily mount (attach NBD)
-    # We run the daemon in a separate process
+    
+    # For formatting, multiprocessing is fine because we wait for it
     device = "/dev/nbd0"
     p = multiprocessing.Process(
         target=nbd_server.run_daemon,
@@ -45,7 +46,6 @@ def create_drive(name: str, size_mb: int, chunk_mb: int, fs: str):
     )
     p.start()
     
-    # Wait for device to appear
     time.sleep(1) 
     
     try:
@@ -53,7 +53,6 @@ def create_drive(name: str, size_mb: int, chunk_mb: int, fs: str):
     except Exception as e:
         typer.secho(f"Formatting failed: {e}", fg="red")
     finally:
-        # Kill the temp daemon
         shell.run(["nbd-client", "-d", device], check=False)
         p.terminate()
         p.join()
@@ -73,15 +72,29 @@ def mount_drive(name: str):
     total_chunks = int(db.get_meta("total_chunks"))
     fs = db.get_meta("fs")
     
-    device = "/dev/nbd0" # In future, find first free NBD
+    device = "/dev/nbd0"
     
     typer.echo("[*] Starting NBD Daemon...")
-    p = multiprocessing.Process(
-        target=nbd_server.run_daemon,
-        args=(path, name, chunk_mb, total_chunks, device)
+    
+    # USE SUBPROCESS TO DETACH
+    # We call ourself with the hidden 'internal-serve' command
+    cmd = [
+        sys.executable, 
+        sys.argv[0], 
+        "internal-serve", 
+        path, 
+        name, 
+        str(chunk_mb), 
+        str(total_chunks), 
+        device
+    ]
+    
+    p = subprocess.Popen(
+        cmd,
+        start_new_session=True, # This detaches the process group
+        stdout=subprocess.DEVNULL, # Suppress stdout
+        stderr=subprocess.DEVNULL  # Suppress stderr (logs go to file if enabled)
     )
-    p.daemon = True
-    p.start()
     
     # Save PID
     with open(get_pid_file(name), 'w') as f:
@@ -89,7 +102,6 @@ def mount_drive(name: str):
     
     time.sleep(1) # Wait for init
     
-    # Mount Filesystem
     mount_point = conf['paths']['mount_root']
     try:
         from core import mount
@@ -97,7 +109,10 @@ def mount_drive(name: str):
         typer.secho(f"[+] Mounted {name} at {mount_point}/{name}", fg="green")
     except Exception as e:
         typer.secho(f"[-] Mount failed: {e}", fg="red")
-        p.terminate()
+        # Cleanup
+        try:
+            os.kill(p.pid, signal.SIGTERM)
+        except: pass
         if os.path.exists(get_pid_file(name)): os.remove(get_pid_file(name))
 
 def umount_drive(name: str):
@@ -111,15 +126,19 @@ def umount_drive(name: str):
     pid_file = get_pid_file(name)
     if os.path.exists(pid_file):
         with open(pid_file, 'r') as f:
-            pid = int(f.read().strip())
+            try:
+                pid = int(f.read().strip())
+            except ValueError:
+                pid = None
         
         # Disconnect NBD gracefully
         shell.run(["nbd-client", "-d", "/dev/nbd0"], check=False)
         
-        try:
-            os.kill(pid, signal.SIGTERM)
-        except ProcessLookupError:
-            pass
+        if pid:
+            try:
+                os.kill(pid, signal.SIGTERM)
+            except ProcessLookupError:
+                pass
             
         os.remove(pid_file)
     
@@ -133,13 +152,12 @@ def is_running(name):
     try:
         with open(pid_file, 'r') as f:
             pid = int(f.read())
-        os.kill(pid, 0) # Check if process exists
+        os.kill(pid, 0)
         return True
     except:
         return False
 
 def check_drive(name: str):
-    # Same logic as before, just verifies files on disk
     validator.require_drive_exists(name)
     path = validator.get_drive_path(name)
     db = database.DBManager(path, name)
@@ -150,22 +168,15 @@ def check_drive(name: str):
     typer.echo("[*] Scanning chunks for changes...")
     
     for c in chunks:
-        # Note: If we wrote data, filenames might still be OLD hash.
-        # We need to find the file by index.
-        # Current naive impl looks for file in DB. 
-        # But IO Engine didn't rename files.
-        # So the file on disk is still `drive.001.OLDHASH.img` but content is NEW.
-        
         curr_path = os.path.join(path, c['filename'])
         if not os.path.exists(curr_path):
             continue
             
         st = os.stat(curr_path)
-        # If mtime changed, rehash
+        # Check tolerance for float mtime
         if abs(st.st_mtime - (c.get('mtime') or 0)) > 0.0001 or st.st_size != c.get('size'):
             new_h = chunker.get_hash(curr_path)
             if new_h != c['hash']:
-                # Rename to new hash
                 new_name = chunker.format_name(name, c['chunk_index'], new_h, padding)
                 new_full = os.path.join(path, new_name)
                 os.rename(curr_path, new_full)

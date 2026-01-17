@@ -1,5 +1,6 @@
 import typer
-from core import manager, validator
+import sys
+from core import manager, validator, nbd_server
 
 app = typer.Typer(help="tgfs: Telegram File System CLI (NBD Architecture)", add_completion=False)
 
@@ -41,6 +42,20 @@ def check_cmd(name: str = typer.Argument(None)):
     """Scans chunks, updates hashes in DB."""
     if not name: name = typer.prompt("Drive Name")
     manager.check_drive(name)
+
+@app.command(name="internal-serve", hidden=True)
+def internal_serve(
+    path: str, 
+    name: str, 
+    chunk_mb: int, 
+    total_chunks: int, 
+    device: str
+):
+    """
+    Internal Entrypoint: Runs the NBD server. 
+    Called via subprocess to detach from terminal.
+    """
+    nbd_server.run_daemon(path, name, chunk_mb, total_chunks, device)
 
 if __name__ == "__main__":
     app()
